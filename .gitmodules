@@ -4,3 +4,6 @@
 [submodule "miniaudio"]
 	path = external/miniaudio
 	url = git@github.com:mackron/miniaudio.git
+[submodule "external/json"]
+	path = external/json
+	url = git@github.com:nlohmann/json.git

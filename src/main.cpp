@@ -1,27 +1,31 @@
 #include "Microphone.h"
 #include "Whisper.h"
+#include "Ollama.h"
 
 #include <iostream>
-#include <thread>
-
 
 int main()
 {
 	Microphone mic;
+	Whisper whisper("models/ggml-tiny.en.bin");
+	Ollama lama("http://localhost:11434/api/chat", "qwen2.5:1.5b");
 
-	Whisper whisper("models/ggml-base.en.bin");
 	std::cout << "[JARVIS] Successfully loaded voice-to-text model. \n";
 
-	mic.start();
+	while (1) {
+		mic.start();
+		std::cout << "[JARVIS] Speak now sentient entity... Press any key to stop";
+		std::cin.get();
 
-	std::cout << "[JARVIS] Speak now sentient entity... Press any key to stop";
-	std::cin.get();
+		auto audio = mic.getAudio();
+		std::cout << "[JARVIS] Processing Prompt\n";
+		std::string text = whisper.transcribe(audio);
 
-	auto audio = mic.getAudio();
-	std::cout << "[JARVIS] Processing Prompt\n";
-	std::string text = whisper.transcribe(audio);
+		std::cout << "[USER] " << text << "\n";
 
-	std::cout << "[JARVIS] Perceived Text: " << text << "\n";
-
-	std::cout << "[JARVIS] Contacting LLM...." << text;
+		std::cout << "[JARVIS] Contacting LLM...." << std::endl;
+		json output = lama.chat(text);
+		std::string message = output["message"]["content"];
+		std::cout << "[JARVIS] " << message << std::endl;
+	}
 }
