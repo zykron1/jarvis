@@ -6,6 +6,7 @@
 #include <whisper.h>
 
 Whisper::Whisper(const std::string& modelPath) {
+	whisper_log_set([](enum ggml_log_level, const char*, void*) {}, nullptr);
 	m_ctx = whisper_init_from_file(modelPath.c_str());
 
 	if (!m_ctx)
