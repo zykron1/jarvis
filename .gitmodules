@@ -1,9 +1,9 @@
 [submodule "external/whisper.cpp"]
 	path = external/whisper.cpp
 	url = https://github.com/ggml-org/whisper.cpp
-[submodule "external/miniaudio"]
-	path = external/miniaudio
-	url = git@github.com:mackron/miniaudio.git
 [submodule "external/json"]
 	path = external/json
 	url = git@github.com:nlohmann/json.git
+[submodule "external/miniaudio"]
+	path = external/miniaudio
+	url = git@github.com:mackron/miniaudio.git
