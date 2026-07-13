@@ -111,6 +111,7 @@ json Ollama::chat(std::string prompt)
 
 	auto parsed_response = json::parse(response);
 
+	std::cout << response << std::endl;
 	std::string reply = parsed_response["message"]["content"];
 	messages.push_back({
 		{"role", "assistant"},
