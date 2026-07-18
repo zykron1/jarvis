@@ -23,11 +23,7 @@ int main()
 {
 	Microphone mic;
 	Whisper whisper("models/ggml-base.en.bin");
-	Ollama lama("http://localhost:11434/api/chat", "qwen3:8b");
-
-	const char* project = std::getenv("JARVIS_PROJECT");
-	if (!project) project = "default";
-	setenv("JARVIS_PROJECT", project, 1);
+	Ollama lama("https://api.groq.com/openai/v1/chat/completions", "llama-3.1-8b-instant");
 
 	MCP mcp;
 	mcp.connect("python3 mcp/server.py");
@@ -44,6 +40,7 @@ int main()
 		std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
 				  << "Speak now sentient entity... Press any key to stop";
 		std::cin.get();
+		mic.stop();
 
 		auto audio = mic.getAudio();
 		std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
