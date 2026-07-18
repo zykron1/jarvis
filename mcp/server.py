@@ -1,205 +1,321 @@
-from mcp.server.fastmcp import FastMCP
+import os
+import re
+import fnmatch
+import hashlib
+import shutil
+import time
+from pathlib import Path
 from datetime import datetime
-import uuid
 
-mcp = FastMCP("Meeting Server")
+from mcp.server.fastmcp import FastMCP
 
-meetings = [
-    {
-        "id": "1",
-        "title": "Project Kickoff",
-        "time": "2026-07-13 10:00",
-        "participants": ["alice@example.com", "bob@example.com"]
-    },
-    {
-        "id": "2",
-        "title": "Design Review",
-        "time": "2026-07-14 14:30",
-        "participants": ["charlie@example.com"]
-    }
-]
+mcp = FastMCP("Coding Agent")
+
+WORKSPACE_ROOT = Path("~/vibes").expanduser()
+WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
+WORKSPACE_ROOT = WORKSPACE_ROOT.resolve()
+SNAPSHOT_DIR = WORKSPACE_ROOT / ".jarvis_snapshots"
 
 
-def find_meeting(meeting_id: str) -> dict | None:
-    for meeting in meetings:
-        if meeting["id"] == meeting_id:
-            return meeting
-    return None
+def _resolve(path: str) -> Path:
+    target = (WORKSPACE_ROOT / path).resolve()
+    if not str(target).startswith(str(WORKSPACE_ROOT)):
+        raise ValueError(f"Path escapes workspace: {path}")
+    return target
+
+
+def _snapshot_key(abs_path: Path) -> str:
+    return hashlib.sha256(str(abs_path).encode()).hexdigest()[:16]
+
+
+def _snapshot_file_path(abs_path: Path) -> Path:
+    key = _snapshot_key(abs_path)
+    safe_name = str(abs_path).replace("/", "_").replace(".", "_")
+    return SNAPSHOT_DIR / key / f"{safe_name}.{int(time.time())}.bak"
+
+
+def _save_snapshot(abs_path: Path):
+    if not abs_path.exists() or not abs_path.is_file():
+        return
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    dest = _snapshot_file_path(abs_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(abs_path, dest)
 
 
 @mcp.tool()
-def list_meetings() -> list[dict]:
+def read_file(path: str, offset: int = 0, limit: int = 0) -> str:
     """
-    Returns all scheduled meetings.
-    """
-    return meetings
-
-
-@mcp.tool()
-def get_meeting(meeting_id: str) -> dict:
-    """
-    Returns a single meeting by id.
+    Read the contents of a file. Returns text with line numbers.
 
     Args:
-        meeting_id: ID of the meeting to fetch
+        path: Relative path to the file (within workspace)
+        offset: Line number to start from (1-indexed, default 0 = from start)
+        limit: Max number of lines to return (0 = all lines)
     """
-    meeting = find_meeting(meeting_id)
-    if not meeting:
-        raise ValueError(f"No meeting found with id {meeting_id}")
-    return meeting
+    target = _resolve(path)
+    if not target.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+    if not target.is_file():
+        raise IsADirectoryError(f"Not a file: {path}")
+
+    lines = target.read_text(errors="replace").splitlines(keepends=True)
+
+    start = max(0, offset - 1) if offset > 0 else 0
+    end = start + limit if limit > 0 else len(lines)
+    end = min(end, len(lines))
+
+    numbered = []
+    for i, line in enumerate(lines[start:end], start=start + 1):
+        numbered.append(f"{i:>6}: {line.rstrip()}")
+
+    return "\n".join(numbered)
 
 
 @mcp.tool()
-def create_meeting(
-    title: str,
-    time: str,
-    participants: list[str]
-) -> dict:
+def write_file(path: str, content: str) -> str:
     """
-    Creates a new meeting.
+    Create or overwrite a file with the given content. Creates parent directories as needed.
 
     Args:
-        title: Meeting title
-        time: Meeting time string
-        participants: List of participant emails
+        path: Relative path to the file (within workspace)
+        content: The full file content to write
     """
-    meeting = {
-        "id": str(uuid.uuid4()),
-        "title": title,
-        "time": time,
-        "participants": participants,
-        "created_at": datetime.now().isoformat()
-    }
-    meetings.append(meeting)
-    return meeting
+    target = _resolve(path)
+    _save_snapshot(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content)
+    return f"Wrote {len(content)} bytes to {path}"
 
 
 @mcp.tool()
-def update_meeting(
-    meeting_id: str,
-    title: str | None = None,
-    time: str | None = None,
-    participants: list[str] | None = None
-) -> dict:
+def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
     """
-    Updates fields on an existing meeting.
+    Replace exact text in a file. Fails if old_string is not found (or found multiple times without replace_all).
 
     Args:
-        meeting_id: ID of the meeting to update
-        title: New title, if changing
-        time: New time, if changing
-        participants: New participant list, if changing
+        path: Relative path to the file (within workspace)
+        old_string: The exact text to find and replace
+        new_string: The text to replace it with
+        replace_all: If true, replace all occurrences. If false, require exactly one match.
     """
-    meeting = find_meeting(meeting_id)
-    if not meeting:
-        raise ValueError(f"No meeting found with id {meeting_id}")
+    target = _resolve(path)
+    if not target.exists():
+        raise FileNotFoundError(f"File not found: {path}")
 
-    if title is not None:
-        meeting["title"] = title
-    if time is not None:
-        meeting["time"] = time
-    if participants is not None:
-        meeting["participants"] = participants
+    _save_snapshot(target)
+    content = target.read_text(errors="replace")
+    count = content.count(old_string)
 
-    meeting["updated_at"] = datetime.now().isoformat()
-    return meeting
+    if count == 0:
+        raise ValueError(f"old_string not found in {path}")
+    if count > 1 and not replace_all:
+        raise ValueError(f"old_string found {count} times in {path}; use replace_all=true or provide more context")
+
+    new_content = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
+    target.write_text(new_content)
+
+    action = "Replaced all" if replace_all else "Replaced first"
+    return f"{action} occurrence of old_string in {path}"
 
 
 @mcp.tool()
-def delete_meeting(meeting_id: str) -> dict:
+def list_files(path: str = ".", pattern: str = "") -> str:
     """
-    Deletes a meeting by id.
+    List directory contents. Optionally filter by glob pattern.
 
     Args:
-        meeting_id: ID of the meeting to delete
+        path: Relative directory path (within workspace, default ".")
+        pattern: Glob pattern to filter entries (e.g. "*.py", "**/*.json")
     """
-    meeting = find_meeting(meeting_id)
-    if not meeting:
-        raise ValueError(f"No meeting found with id {meeting_id}")
-    meetings.remove(meeting)
-    return {"deleted": True, "id": meeting_id}
+    target = _resolve(path)
+    if not target.exists():
+        raise FileNotFoundError(f"Directory not found: {path}")
+    if not target.is_dir():
+        raise NotADirectoryError(f"Not a directory: {path}")
+
+    entries = []
+    for entry in sorted(target.iterdir()):
+        name = entry.name
+        prefix = "d" if entry.is_dir() else "f"
+        if pattern:
+            if "**" in pattern:
+                if not fnmatch.fnmatch(str(entry.relative_to(WORKSPACE_ROOT)), pattern):
+                    continue
+            else:
+                if not fnmatch.fnmatch(name, pattern):
+                    continue
+        entries.append(f"[{prefix}] {name}")
+
+    if not entries:
+        return "(empty)"
+
+    return "\n".join(entries)
 
 
 @mcp.tool()
-def add_participant(meeting_id: str, email: str) -> dict:
+def search_content(pattern: str, path: str = ".", include: str = "") -> str:
     """
-    Adds a participant to a meeting.
+    Search file contents using regex (like grep). Returns matching lines with file:line.
 
     Args:
-        meeting_id: ID of the meeting
-        email: Participant email to add
+        pattern: Regex pattern to search for
+        path: Relative directory or file path to search in (default ".")
+        include: Glob pattern to filter files (e.g. "*.py", "*.cpp")
     """
-    meeting = find_meeting(meeting_id)
-    if not meeting:
-        raise ValueError(f"No meeting found with id {meeting_id}")
-    if email not in meeting["participants"]:
-        meeting["participants"].append(email)
-    return meeting
+    target = _resolve(path)
+    if not target.exists():
+        raise FileNotFoundError(f"Path not found: {path}")
+
+    regex = re.compile(pattern)
+    results = []
+
+    files_to_search = []
+    if target.is_file():
+        files_to_search = [target]
+    else:
+        for root, dirs, files in os.walk(target):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__pycache__"]
+            for fname in files:
+                if include and not fnmatch.fnmatch(fname, include):
+                    continue
+                files_to_search.append(Path(root) / fname)
+
+    for fpath in files_to_search:
+        try:
+            lines = fpath.read_text(errors="replace").splitlines()
+        except (PermissionError, OSError):
+            continue
+        for i, line in enumerate(lines, 1):
+            if regex.search(line):
+                rel = fpath.relative_to(WORKSPACE_ROOT)
+                results.append(f"{rel}:{i}: {line.rstrip()}")
+
+    if not results:
+        return "(no matches)"
+
+    return "\n".join(results[:200])
 
 
 @mcp.tool()
-def remove_participant(meeting_id: str, email: str) -> dict:
+def search_files(pattern: str, path: str = ".") -> str:
     """
-    Removes a participant from a meeting.
+    Search for files by name using glob pattern (like find). Supports ** for recursive matching.
 
     Args:
-        meeting_id: ID of the meeting
-        email: Participant email to remove
+        pattern: Glob pattern for filenames (e.g. "*.py", "**/*.json", "test_*")
+        path: Relative directory to search in (default ".")
     """
-    meeting = find_meeting(meeting_id)
-    if not meeting:
-        raise ValueError(f"No meeting found with id {meeting_id}")
-    if email in meeting["participants"]:
-        meeting["participants"].remove(email)
-    return meeting
+    target = _resolve(path)
+    if not target.exists():
+        raise FileNotFoundError(f"Path not found: {path}")
+    if not target.is_dir():
+        raise NotADirectoryError(f"Not a directory: {path}")
+
+    matches = []
+    for root, dirs, files in os.walk(target):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__pycache__"]
+        for fname in dirs + files:
+            full = Path(root) / fname
+            rel = full.relative_to(WORKSPACE_ROOT)
+            if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(fname, pattern):
+                prefix = "d" if full.is_dir() else "f"
+                matches.append(f"[{prefix}] {rel}")
+
+    if not matches:
+        return "(no matches)"
+
+    return "\n".join(sorted(matches)[:200])
 
 
 @mcp.tool()
-def find_meetings_by_participant(email: str) -> list[dict]:
+def get_file_info(path: str) -> str:
     """
-    Returns all meetings that include a given participant.
+    Get metadata about a file or directory: size, last modified, type, permissions.
 
     Args:
-        email: Participant email to search for
+        path: Relative path to the file or directory (within workspace)
     """
-    return [m for m in meetings if email in m["participants"]]
+    target = _resolve(path)
+    if not target.exists():
+        raise FileNotFoundError(f"Not found: {path}")
+
+    stat = target.stat()
+    kind = "directory" if target.is_dir() else "file"
+    size = stat.st_size
+    mtime = datetime.fromtimestamp(stat.st_mtime).isoformat()
+
+    parts = [
+        f"Type: {kind}",
+        f"Size: {size} bytes",
+        f"Modified: {mtime}",
+        f"Path: {target.relative_to(WORKSPACE_ROOT)}",
+    ]
+
+    if target.is_file():
+        lines = target.read_text(errors="replace").splitlines()
+        parts.append(f"Lines: {len(lines)}")
+
+    return "\n".join(parts)
 
 
 @mcp.tool()
-def find_meetings_in_range(start: str, end: str) -> list[dict]:
+def create_directory(path: str) -> str:
     """
-    Returns meetings whose time falls within a given range.
+    Create a directory (and any missing parents).
 
     Args:
-        start: Start time string, format YYYY-MM-DD HH:MM
-        end: End time string, format YYYY-MM-DD HH:MM
+        path: Relative directory path to create (within workspace)
     """
-    start_dt = datetime.fromisoformat(start)
-    end_dt = datetime.fromisoformat(end)
-    result = []
-    for m in meetings:
-        m_dt = datetime.fromisoformat(m["time"])
-        if start_dt <= m_dt <= end_dt:
-            result.append(m)
-    return result
+    target = _resolve(path)
+    target.mkdir(parents=True, exist_ok=True)
+    return f"Created directory: {path}"
 
 
 @mcp.tool()
-def check_conflict(time: str, participants: list[str]) -> dict:
+def delete_path(path: str) -> str:
     """
-    Checks whether any given participants already have a meeting at the given time.
+    Delete a file or directory. Snapshots the file first if it exists and is a file.
 
     Args:
-        time: Proposed meeting time string
-        participants: List of participant emails to check
+        path: Relative path to delete (within workspace)
     """
-    conflicts = []
-    for m in meetings:
-        if m["time"] == time:
-            overlap = set(m["participants"]) & set(participants)
-            if overlap:
-                conflicts.append({"meeting_id": m["id"], "title": m["title"], "overlapping": list(overlap)})
-    return {"has_conflict": len(conflicts) > 0, "conflicts": conflicts}
+    target = _resolve(path)
+    if not target.exists():
+        raise FileNotFoundError(f"Not found: {path}")
+
+    _save_snapshot(target)
+
+    if target.is_dir():
+        shutil.rmtree(target)
+        return f"Deleted directory: {path}"
+
+    target.unlink()
+    return f"Deleted file: {path}"
+
+
+@mcp.tool()
+def undo_edit(path: str) -> str:
+    """
+    Restore the most recent snapshot of a file before its last modification.
+
+    Args:
+        path: Relative path to the file to restore (within workspace)
+    """
+    target = _resolve(path)
+    key = _snapshot_key(target)
+    snapshot_dir = SNAPSHOT_DIR / key
+
+    if not snapshot_dir.exists():
+        raise FileNotFoundError(f"No snapshots found for {path}")
+
+    snapshots = sorted(snapshot_dir.iterdir(), key=lambda f: f.name, reverse=True)
+    if not snapshots:
+        raise FileNotFoundError(f"No snapshots found for {path}")
+
+    latest = snapshots[0]
+    shutil.copy2(latest, target)
+    return f"Restored {path} from snapshot {latest.name}"
 
 
 if __name__ == "__main__":

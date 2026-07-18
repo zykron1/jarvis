@@ -5,12 +5,29 @@
 #include "nlohmann/json.hpp"
 
 #include <iostream>
+#include <cstdlib>
+
+namespace color {
+	const char* reset   = "\033[0m";
+	const char* bold    = "\033[1m";
+	const char* dim     = "\033[2m";
+	const char* cyan    = "\033[36m";
+	const char* green   = "\033[32m";
+	const char* yellow  = "\033[33m";
+	const char* magenta = "\033[35m";
+	const char* red     = "\033[31m";
+	const char* blue    = "\033[34m";
+}
 
 int main()
 {
 	Microphone mic;
 	Whisper whisper("models/ggml-base.en.bin");
-	Ollama lama("http://localhost:11434/api/chat", "qwen2.5:1.5b");
+	Ollama lama("http://localhost:11434/api/chat", "qwen3:8b");
+
+	const char* project = std::getenv("JARVIS_PROJECT");
+	if (!project) project = "default";
+	setenv("JARVIS_PROJECT", project, 1);
 
 	MCP mcp;
 	mcp.connect("python3 mcp/server.py");
@@ -19,31 +36,40 @@ int main()
 		lama.addTool(mcp_func);
 	}
 
-	std::cout << "[JARVIS] Successfully loaded voice-to-text model. \n";
+	std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
+			  << color::dim << "Successfully loaded voice-to-text model." << color::reset << "\n";
 
 	while (1) {
 		mic.start();
-		std::cout << "[JARVIS] Speak now sentient entity... Press any key to stop";
+		std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
+				  << "Speak now sentient entity... Press any key to stop";
 		std::cin.get();
 
 		auto audio = mic.getAudio();
-		std::cout << "[JARVIS] Processing Prompt\n";
+		std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
+				  << color::dim << "Processing prompt..." << color::reset << std::endl;
 		std::string text = whisper.transcribe(audio);
 
-		std::cout << "[USER] " << text << "\n";
+		std::cout << color::green << color::bold << "[USER] " << color::reset
+				  << text << "\n" << std::endl;
 
-		std::cout << "[JARVIS] Contacting LLM...." << std::endl;
-		json output = lama.chat(text);
+		std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
+				  << color::dim << "Thinking..." << color::reset << std::endl;
+		std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
+		json output = lama.chat(text, [](const std::string& token) {
+			std::cout << token << std::flush;
+		});
+		std::cout << std::endl;
 
-		std::string message = output["message"]["content"];
-		std::cout << "[JARVIS] " << message << std::endl;
-
-		if (output["message"].contains("tool_calls")) {
+		while (output["message"].contains("tool_calls")) {
 			json tool_calls = output["message"]["tool_calls"];
 		
 			for (auto& call : tool_calls) {
 				std::string name = call["function"]["name"];
 				json arguments = call["function"].value("arguments", json::object());
+		
+				std::cout << color::yellow << color::bold << "  [TOOL] " << color::reset
+						  << color::dim << name << color::reset << std::endl;
 		
 				json result = mcp.callTool(name, arguments);
 		
@@ -52,11 +78,14 @@ int main()
 					{"content", result.dump()}
 				};
 		
-				output = lama.chat(tool_response);
+				std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
+				output = lama.chat(tool_response, [](const std::string& token) {
+					std::cout << token << std::flush;
+				});
+				std::cout << std::endl;
 			}
-		
-			message = output["message"].value("content", "");
-			std::cout << "[JARVIS] " << message << std::endl;
 		}
+
+		std::cout << std::endl;
 	}
 }
