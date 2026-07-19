@@ -41,7 +41,7 @@ Ollama::Ollama(std::string url, std::string model, std::string api_key)
 	loadEnvFile(".env");
 
 	if (this->api_key.empty()) {
-		const char* env_key = std::getenv("groq_api_key");
+		const char* env_key = std::getenv("api_key");
 		if (env_key) this->api_key = env_key;
 	}
 

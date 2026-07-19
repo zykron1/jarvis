@@ -23,7 +23,7 @@ int main()
 {
 	Microphone mic;
 	Whisper whisper("models/ggml-base.en.bin");
-	Ollama lama("https://api.groq.com/openai/v1/chat/completions", "llama-3.1-8b-instant");
+	Ollama lama("https://ai.hackclub.com/proxy/v1/chat/completions", "openai/gpt-5.6-sol");
 
 	MCP mcp;
 	mcp.connect("python3 mcp/server.py");
