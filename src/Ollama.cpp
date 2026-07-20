@@ -108,8 +108,12 @@ static void parseOpenAISSE(const std::string& line, StreamState* state)
 
 	try {
 		auto chunk = json::parse(json_str);
-
+		if (chunk.contains("error")) {
+			std::cerr << "\n[API ERROR] " << chunk["error"].dump(2) << std::endl;
+			return;
+		}
 		if (!chunk.contains("choices") || chunk["choices"].empty()) return;
+
 		auto& delta = chunk["choices"][0];
 
 		if (delta.contains("delta")) {
@@ -219,13 +223,12 @@ static json buildResponse(StreamState& state)
 
 				if (fn.contains("arguments")) {
 					std::string args_str = fn["arguments"].get<std::string>();
-					try {
-						call["function"]["arguments"] = json::parse(args_str);
-					} catch (...) {
-						call["function"]["arguments"] = json::object();
-					}
+					if (json::accept(args_str))
+						call["function"]["arguments"] = args_str;
+					else
+						call["function"]["arguments"] = "{}";
 				} else {
-					call["function"]["arguments"] = json::object();
+					call["function"]["arguments"] = "{}";
 				}
 			}
 
@@ -309,6 +312,12 @@ json Ollama::doRequest(StreamCallback on_token)
 
 	CURLcode result = curl_easy_perform(this->curl);
 
+	long http_code = 0;
+	curl_easy_getinfo(this->curl, CURLINFO_RESPONSE_CODE, &http_code);
+	if (http_code >= 400) {
+		std::cerr << "\n[HTTP " << http_code << "] Raw body: " << state.buffer << state.full_content << std::endl;
+	}
+
 	processRemainingBuffer(&state);
 
 	curl_slist_free_all(headers);
@@ -323,7 +332,7 @@ json Ollama::doRequest(StreamCallback on_token)
 		messages.push_back(parsed_response["message"]);
 	}
 
-	std::cout << parsed_response << std::endl;
+	std::cout << "\n\033[2m" << parsed_response.dump(2) << "\033[0m" << std::endl;
 	return parsed_response;
 }
 

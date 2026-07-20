@@ -86,7 +86,13 @@ int main(int argc, char* argv[])
 
 		for (auto& call : tool_calls) {
 			std::string name = call["function"]["name"];
-			json arguments = call["function"].value("arguments", json::object());
+			std::string args_str = call["function"].value("arguments", "{}");
+			json arguments;
+			try {
+				arguments = json::parse(args_str);
+			} catch (...) {
+				arguments = json::object();
+			}
 
 			std::cout << color::yellow << color::bold << "  [TOOL] " << color::reset
 					  << color::dim << name << color::reset << std::endl;
