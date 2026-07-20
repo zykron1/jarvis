@@ -4,6 +4,7 @@ import fnmatch
 import hashlib
 import shutil
 import time
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -316,6 +317,41 @@ def undo_edit(path: str) -> str:
     latest = snapshots[0]
     shutil.copy2(latest, target)
     return f"Restored {path} from snapshot {latest.name}"
+
+
+@mcp.tool()
+def bash(command: str, timeout: int = 30) -> str:
+    """
+    Run a shell command in the workspace directory. Returns stdout and stderr.
+
+    Args:
+        command: The shell command to execute
+        timeout: Maximum seconds to wait (default 30, max 120)
+    """
+    timeout = min(max(timeout, 1), 120)
+
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            cwd=str(WORKSPACE_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return f"Command timed out after {timeout}s: {command}"
+
+    parts = []
+    if result.stdout:
+        parts.append(result.stdout.rstrip())
+    if result.stderr:
+        parts.append(result.stderr.rstrip())
+    if not parts:
+        parts.append("(no output)")
+
+    parts.append(f"\nExit code: {result.returncode}")
+    return "\n".join(parts)
 
 
 if __name__ == "__main__":

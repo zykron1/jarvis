@@ -33,8 +33,10 @@ static void loadEnvFile(const std::string& path)
 }
 
 Ollama::Ollama(std::string url, std::string model, std::string api_key)
-	: url(url), model(model), api_key(api_key)
+	: url(url), model(model), api_key(api_key), curl(nullptr)
 {
+	curl_global_init(CURL_GLOBAL_DEFAULT);
+
 	openai_compat = (url.find("localhost") == std::string::npos &&
 					 url.find("127.0.0.1") == std::string::npos);
 
@@ -196,7 +198,10 @@ static json buildResponse(StreamState& state)
 {
 	json response_msg;
 	response_msg["role"] = "assistant";
-	response_msg["content"] = state.full_content;
+	if (state.has_tool_calls && state.full_content.empty())
+		response_msg["content"] = nullptr;
+	else
+		response_msg["content"] = state.full_content;
 
 	if (state.has_tool_calls) {
 		json formatted_calls = json::array();
@@ -235,208 +240,118 @@ static json buildResponse(StreamState& state)
 	return parsed_response;
 }
 
-json Ollama::chat(std::string prompt, StreamCallback on_token)
+json Ollama::doRequest(StreamCallback on_token)
 {
-	curl_global_init(CURL_GLOBAL_DEFAULT);
-
 	this->curl = curl_easy_init();
 
 	if (!this->curl)
 		return json();
 
+	json request;
+
+	request["model"] = model;
+	request["stream"] = true;
+	request["messages"] = messages;
+	if (!tools.empty()) request["tools"] = tools;
+
+	std::string j = request.dump();
+
+	curl_easy_setopt(
+		this->curl,
+		CURLOPT_URL,
+		this->url.c_str()
+	);
+
+	curl_easy_setopt(
+		this->curl,
+		CURLOPT_POST,
+		1L
+	);
+
+	curl_easy_setopt(
+		this->curl,
+		CURLOPT_POSTFIELDS,
+		j.c_str()
+	);
+
+	curl_slist* headers = nullptr;
+	headers = curl_slist_append(
+		headers,
+		"Content-Type: application/json"
+	);
+
+	if (!api_key.empty()) {
+		std::string auth = "Authorization: Bearer " + api_key;
+		headers = curl_slist_append(headers, auth.c_str());
+	}
+
+	curl_easy_setopt(
+		this->curl,
+		CURLOPT_HTTPHEADER,
+		headers
+	);
+
+	StreamState state;
+	state.on_token = on_token;
+	state.openai_compat = openai_compat;
+
+	curl_easy_setopt(
+		this->curl,
+		CURLOPT_WRITEFUNCTION,
+		streamWriteCallback
+	);
+
+	curl_easy_setopt(
+		this->curl,
+		CURLOPT_WRITEDATA,
+		&state
+	);
+
+	CURLcode result = curl_easy_perform(this->curl);
+
+	processRemainingBuffer(&state);
+
+	curl_slist_free_all(headers);
+	curl_easy_cleanup(this->curl);
+
+	if (result != CURLE_OK)
+		return json();
+
+	json parsed_response = buildResponse(state);
+
+	if (parsed_response.contains("message")) {
+		messages.push_back(parsed_response["message"]);
+	}
+
+	std::cout << parsed_response << std::endl;
+	return parsed_response;
+}
+
+json Ollama::chat(std::string prompt, StreamCallback on_token)
+{
 	messages.push_back({
 		{"role", "user"},
 		{"content", prompt}
 	});
 
-	json request;
-
-	request["model"] = model;
-	request["stream"] = true;
-	request["messages"] = messages;
-	if (!tools.empty()) request["tools"] = tools;
-
-	std::string j = request.dump();
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_URL,
-		this->url.c_str()
-	);
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_POST,
-		1L
-	);
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_POSTFIELDS,
-		j.c_str()
-	);
-
-	curl_slist* headers = nullptr;
-	headers = curl_slist_append(
-		headers,
-		"Content-Type: application/json"
-	);
-
-	if (!api_key.empty()) {
-		std::string auth = "Authorization: Bearer " + api_key;
-		headers = curl_slist_append(headers, auth.c_str());
-	}
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_HTTPHEADER,
-		headers
-	);
-
-	StreamState state;
-	state.on_token = on_token;
-	state.openai_compat = openai_compat;
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_WRITEFUNCTION,
-		streamWriteCallback
-	);
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_WRITEDATA,
-		&state
-	);
-
-	CURLcode result = curl_easy_perform(this->curl);
-
-	processRemainingBuffer(&state);
-
-	curl_slist_free_all(headers);
-	curl_easy_cleanup(this->curl);
-
-	if (result != CURLE_OK)
-		return json();
-
-	json parsed_response = buildResponse(state);
-
-	if (parsed_response.contains("message")) {
-		messages.push_back(parsed_response["message"]);
-	}
-
-	return parsed_response;
+	return doRequest(on_token);
 }
 
 json Ollama::chat(json message, StreamCallback on_token)
 {
-	curl_global_init(CURL_GLOBAL_DEFAULT);
-
-	this->curl = curl_easy_init();
-
-	if (!this->curl)
-		return json();
-
-	if (openai_compat && message.value("role", "") == "tool") {
-		json tool_call_id;
-
-		for (int i = (int)messages.size() - 1; i >= 0; i--) {
-			if (messages[i].value("role", "") == "assistant" &&
-				messages[i].contains("tool_calls")) {
-				for (auto& tc : messages[i]["tool_calls"]) {
-					if (tc.contains("id")) {
-						tool_call_id = tc["id"];
-						break;
-					}
-				}
-				break;
-			}
-		}
-
-		if (!tool_call_id.is_null()) {
-			message["tool_call_id"] = tool_call_id;
-		}
-	}
-
 	messages.push_back(message);
 
-	json request;
+	return doRequest(on_token);
+}
 
-	request["model"] = model;
-	request["stream"] = true;
-	request["messages"] = messages;
-	if (!tools.empty()) request["tools"] = tools;
+void Ollama::addMessage(json message)
+{
+	messages.push_back(message);
+}
 
-	std::string j = request.dump();
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_URL,
-		this->url.c_str()
-	);
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_POST,
-		1L
-	);
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_POSTFIELDS,
-		j.c_str()
-	);
-
-	curl_slist* headers = nullptr;
-	headers = curl_slist_append(
-		headers,
-		"Content-Type: application/json"
-	);
-
-	if (!api_key.empty()) {
-		std::string auth = "Authorization: Bearer " + api_key;
-		headers = curl_slist_append(headers, auth.c_str());
-	}
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_HTTPHEADER,
-		headers
-	);
-
-	StreamState state;
-	state.on_token = on_token;
-	state.openai_compat = openai_compat;
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_WRITEFUNCTION,
-		streamWriteCallback
-	);
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_WRITEDATA,
-		&state
-	);
-
-	CURLcode result = curl_easy_perform(this->curl);
-
-	processRemainingBuffer(&state);
-
-	curl_slist_free_all(headers);
-	curl_easy_cleanup(this->curl);
-
-	if (result != CURLE_OK)
-		return json();
-
-	json parsed_response = buildResponse(state);
-
-	if (parsed_response.contains("message")) {
-		messages.push_back(parsed_response["message"]);
-	}
-
-	return parsed_response;
+json Ollama::complete(StreamCallback on_token)
+{
+	return doRequest(on_token);
 }
 
 void Ollama::addTool(json mcp_tool)

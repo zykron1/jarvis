@@ -6,6 +6,9 @@
 
 #include <iostream>
 #include <cstdlib>
+#include <ostream>
+#include <string>
+#include <filesystem>
 
 namespace color {
 	const char* reset   = "\033[0m";
@@ -19,11 +22,31 @@ namespace color {
 	const char* blue    = "\033[34m";
 }
 
-int main()
+int main(int argc, char* argv[])
 {
+	std::string prog = std::filesystem::path(argv[0]).filename().string();
+	std::string model = "anthropic/claude-sonnet-4";
+
+	if (argc > 1) {
+		std::string arg = argv[1];
+		if (arg == "--help" || arg == "-h") {
+			std::cout << "Usage: " << prog << " [MODEL]\n\n"
+					  << "  MODEL  OpenRouter model ID (default: anthropic/claude-sonnet-4)\n"
+					  << "\nExamples:\n"
+					  << "  " << prog << "\n"
+					  << "  " << prog << " openrouter/owl-alpha:free\n"
+					  << "  " << prog << " nvidia/nemotron-3-super:free\n"
+					  << "  " << prog << " anthropic/claude-sonnet-4\n";
+			return 0;
+		}
+		model = arg;
+	}
+
 	Microphone mic;
 	Whisper whisper("models/ggml-base.en.bin");
-	Ollama lama("https://ai.hackclub.com/proxy/v1/chat/completions", "openai/gpt-5.6-sol");
+	Ollama lama("https://ai.hackclub.com/proxy/v1/chat/completions", model);
+
+	std::cout << "Model: " << model << std::endl;
 
 	MCP mcp;
 	mcp.connect("python3 mcp/server.py");
@@ -60,27 +83,50 @@ int main()
 
 		while (output["message"].contains("tool_calls")) {
 			json tool_calls = output["message"]["tool_calls"];
-		
-			for (auto& call : tool_calls) {
-				std::string name = call["function"]["name"];
-				json arguments = call["function"].value("arguments", json::object());
-		
-				std::cout << color::yellow << color::bold << "  [TOOL] " << color::reset
-						  << color::dim << name << color::reset << std::endl;
-		
+
+		for (auto& call : tool_calls) {
+			std::string name = call["function"]["name"];
+			json arguments = call["function"].value("arguments", json::object());
+
+			std::cout << color::yellow << color::bold << "  [TOOL] " << color::reset
+					  << color::dim << name << color::reset << std::endl;
+
+			std::string tool_text;
+			try {
 				json result = mcp.callTool(name, arguments);
-		
-				json tool_response = {
-					{"role", "tool"},
-					{"content", result.dump()}
-				};
-		
-				std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
-				output = lama.chat(tool_response, [](const std::string& token) {
-					std::cout << token << std::flush;
-				});
-				std::cout << std::endl;
+
+				if (result.contains("content") && result["content"].is_array()) {
+					for (auto& item : result["content"]) {
+						if (item.contains("text")) {
+							tool_text += item["text"].get<std::string>();
+						}
+					}
+				} else {
+					tool_text = result.dump();
+				}
+			} catch (const std::exception& e) {
+				tool_text = std::string("Error calling tool '") + name + "': " + e.what();
+				std::cout << color::red << color::bold << "  [ERROR] " << color::reset
+						  << color::dim << tool_text << color::reset << std::endl;
 			}
+
+			json tool_response = {
+				{"role", "tool"},
+				{"content", tool_text}
+			};
+
+			if (call.contains("id") && !call["id"].is_null()) {
+				tool_response["tool_call_id"] = call["id"];
+			}
+
+			lama.addMessage(tool_response);
+		}
+
+			std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
+			output = lama.complete([](const std::string& token) {
+				std::cout << token << std::flush;
+			});
+			std::cout << std::endl;
 		}
 
 		std::cout << std::endl;
