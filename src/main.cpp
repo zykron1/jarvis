@@ -27,7 +27,7 @@ namespace color {
 int main(int argc, char* argv[])
 {
 	std::string prog = std::filesystem::path(argv[0]).filename().string();
-	std::string model = "openai/gpt-oss-20b";
+	std::string model = "qwen3:1.7b";
 	std::string mode = "code";
 	std::string workspace = std::filesystem::current_path().string();
 
@@ -80,7 +80,9 @@ int main(int argc, char* argv[])
 
 	Microphone mic;
 	Whisper whisper("models/ggml-base.en.bin");
-	Ollama lama("https://openrouter.ai/api/v1/chat/completions", model, "", promptPath);
+	//Ollama lama("https://ai.hackclub.com/proxy/v1/chat/completions", model, "", promptPath);
+	//Ollama lama("https://openrouter.ai/api/v1/chat/completions", model, "", promptPath);
+	Ollama lama("http://localhost:11434/v1/completions", model, "", promptPath);
 
 	MCPManager mcp;
 	if (!mcp.loadConfig("mcp-servers.json", workspace)) {
@@ -234,11 +236,11 @@ int main(int argc, char* argv[])
 
 		std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
 				  << color::dim << "Thinking..." << color::reset << std::endl;
-		std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
-		json output = lama.chat(prompt, [](const std::string& token) {
-			std::cout << token << std::flush;
+
+		std::string streamed;
+		json output = lama.chat(prompt, [&streamed](const std::string& token) {
+			streamed += token;
 		});
-		std::cout << std::endl;
 
 		for (int retry = 0; retry < 3; retry++) {
 			auto& content = output["message"]["content"];
@@ -250,11 +252,10 @@ int main(int argc, char* argv[])
 			std::cout << color::yellow << color::bold << "  [RETRY] " << color::reset
 					  << color::dim << "Empty response, waiting 1s and retrying..." << color::reset << std::endl;
 			std::this_thread::sleep_for(std::chrono::seconds(1));
-			std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
-			output = lama.chat(std::string("continue"), [](const std::string& token) {
-				std::cout << token << std::flush;
+			streamed.clear();
+			output = lama.chat(std::string("continue"), [&streamed](const std::string& token) {
+				streamed += token;
 			});
-			std::cout << std::endl;
 		}
 
 		while (output["message"].contains("tool_calls")) {
@@ -323,11 +324,10 @@ int main(int argc, char* argv[])
 				lama.addMessage(tool_response);
 			}
 
-			std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
-			output = lama.complete([](const std::string& token) {
-				std::cout << token << std::flush;
+			streamed.clear();
+			output = lama.complete([&streamed](const std::string& token) {
+				streamed += token;
 			});
-			std::cout << std::endl;
 
 			for (int retry = 0; retry < 3; retry++) {
 				auto& content = output["message"]["content"];
@@ -339,14 +339,21 @@ int main(int argc, char* argv[])
 				std::cout << color::yellow << color::bold << "  [RETRY] " << color::reset
 						  << color::dim << "Empty response, waiting 1s and retrying..." << color::reset << std::endl;
 				std::this_thread::sleep_for(std::chrono::seconds(1));
-				std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
-				output = lama.chat(std::string("continue"), [](const std::string& token) {
-					std::cout << token << std::flush;
+				streamed.clear();
+				output = lama.chat(std::string("continue"), [&streamed](const std::string& token) {
+					streamed += token;
 				});
-				std::cout << std::endl;
 			}
 		}
 
+		auto& final_content = output["message"]["content"];
+		if (output["message"].contains("content")
+			&& !final_content.is_null()
+			&& final_content.is_string()
+			&& !final_content.get<std::string>().empty()) {
+			std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
+					  << final_content.get<std::string>() << std::endl;
+		}
 		std::cout << std::endl;
 	}
 }

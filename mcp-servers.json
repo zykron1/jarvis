@@ -6,6 +6,10 @@
       "env": {
         "JARVIS_WORKSPACE": "."
       }
+    },
+    "exa": {
+      "type": "stdio",
+      "command": "python3 mcp/exa.py"
     }
   }
 }

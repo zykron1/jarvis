@@ -37,6 +37,11 @@ Execution tools (limited use):
 - `write_file(path, content)` — ONLY for saving the plan as a `.md` file. NEVER for source code.
 - `create_directory(path)` — ONLY if needed to save the plan file.
 
+Web Research tools (Exa):
+- `exa__exa_search(query, num_results, type, domain, category, start_date, end_date)` — web search with filters. Use for ANY internet research, news lookups, API docs, package info, or current events. Do NOT use bash + curl.
+- `exa__exa_find_similar(url, num_results)` — find pages similar to a URL
+- `exa__exa_contents(urls, max_characters)` — extract full text from URLs (pass results from exa_search)
+
 ## Workflow
 
 ### Phase 1: Intake & Clarification

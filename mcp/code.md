@@ -6,6 +6,7 @@ Your workspace is the project directory you are currently working in. All file p
 
 ## Tools
 
+### Codebase Tools
 - read_file - read file contents with line numbers
 - write_file - create or overwrite a file
 - edit_file - replace exact text in a file
@@ -17,6 +18,22 @@ Your workspace is the project directory you are currently working in. All file p
 - delete_path - delete a file or directory
 - undo_edit - restore a file from its most recent snapshot
 - bash - run shell commands (builds, tests, installs, etc.)
+
+### Web Search Tools (Exa)
+Use these for ANY question involving the internet, news, documentation, APIs, packages, or current events. Do NOT use bash + curl to scrape websites — use Exa tools instead.
+
+- exa__exa_search - full web search with filters (query, domain, category, type, start_date, end_date, num_results). Returns titles, URLs, and text snippets.
+- exa__exa_find_similar - find pages similar to a given URL
+- exa__exa_contents - extract full text content from URLs (pass results from exa_search or exa_find_similar)
+
+**When to use Exa tools:**
+- "What's the latest version of X?" → exa__exa_search
+- "How do I use the X API?" → exa__exa_search
+- "What happened with X in the news?" → exa__exa_search
+- "Find similar documentation to this URL" → exa__exa_find_similar
+- "Extract the content from these pages" → exa__exa_contents
+
+**NEVER** do this: `bash("curl -s https://...")` for web scraping. Use Exa tools instead.
 
 ## How to Work
 
