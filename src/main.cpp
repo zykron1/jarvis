@@ -25,31 +25,59 @@ namespace color {
 int main(int argc, char* argv[])
 {
 	std::string prog = std::filesystem::path(argv[0]).filename().string();
-	std::string model = "anthropic/claude-sonnet-4";
+	std::string model = "nvidia/nemotron-3-ultra-550b-a55b:free";
+	std::string mode = "code";
+	std::string workspace = std::filesystem::current_path().string();
 
-	if (argc > 1) {
-		std::string arg = argv[1];
+	for (int i = 1; i < argc; i++) {
+		std::string arg = argv[i];
 		if (arg == "--help" || arg == "-h") {
-			std::cout << "Usage: " << prog << " [MODEL]\n\n"
-					  << "  MODEL  OpenRouter model ID (default: anthropic/claude-sonnet-4)\n"
+			std::cout << "Usage: " << prog << " [OPTIONS] [FOLDER] [MODEL]\n\n"
+					  << "  FOLDER  Project directory to work in (default: current directory)\n"
+					  << "  MODEL   OpenRouter model ID (default: anthropic/claude-sonnet-4)\n\n"
+					  << "Options:\n"
+					  << "  -m, --mode <mode>   Agent mode: code, hack, plan (default: code)\n"
+					  << "  -h, --help          Show this help message\n"
 					  << "\nExamples:\n"
 					  << "  " << prog << "\n"
-					  << "  " << prog << " openrouter/owl-alpha:free\n"
-					  << "  " << prog << " nvidia/nemotron-3-super:free\n"
-					  << "  " << prog << " anthropic/claude-sonnet-4\n";
+					  << "  " << prog << " /path/to/project\n"
+					  << "  " << prog << " /path/to/project --mode hack\n"
+					  << "  " << prog << " -m plan /path/to/project nvidia/nemotron-3-super:free\n";
 			return 0;
 		}
-		model = arg;
+		if (arg == "-m" || arg == "--mode") {
+			if (i + 1 < argc) {
+				mode = argv[++i];
+				if (mode != "code" && mode != "hack" && mode != "plan") {
+					std::cerr << "Invalid mode: " << mode << "\n"
+							  << "Valid modes: code, hack, plan\n";
+					return 1;
+				}
+			} else {
+				std::cerr << "Error: --mode requires an argument\n";
+				return 1;
+			}
+		} else if (std::filesystem::is_directory(arg)) {
+			workspace = std::filesystem::absolute(arg).string();
+		} else {
+			model = arg;
+		}
 	}
+
+	std::string modeLabel = (mode == "code") ? "Coder" :
+							(mode == "hack") ? "Pentester" : "Planner";
+	std::string promptPath = "mcp/" + mode + ".md";
 
 	Microphone mic;
 	Whisper whisper("models/ggml-base.en.bin");
-	Ollama lama("https://ai.hackclub.com/proxy/v1/chat/completions", model);
+	//Ollama lama("https://openrouter.ai/api/v1/chat/completions", model, "", promptPath);
+	Ollama lama("https://ai.hackclub.com/proxy/v1/chat/completions", model, "", promptPath);
 
-	std::cout << "Model: " << model << std::endl;
+	std::cout << "Model: " << model << " | Mode: " << color::magenta << modeLabel << color::reset
+			  << " | Workspace: " << color::dim << workspace << color::reset << std::endl;
 
 	MCP mcp;
-	mcp.connect("python3 mcp/server.py");
+	mcp.connect("JARVIS_WORKSPACE=" + workspace + " python3 mcp/server.py");
 
 	for (auto& mcp_func : mcp.listTools()) {
 		lama.addTool(mcp_func);
@@ -59,27 +87,143 @@ int main(int argc, char* argv[])
 			  << color::dim << "Successfully loaded voice-to-text model." << color::reset << "\n";
 
 	while (1) {
-		mic.start();
-		std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
-				  << "Speak now sentient entity... Press any key to stop";
-		std::cin.get();
-		mic.stop();
+		std::cout << color::cyan << color::bold << "[" << modeLabel << "] " << color::reset
+				  << color::dim << "Type /voice to speak, or type a prompt:" << color::reset << std::endl;
+		std::cout << color::green << color::bold << "> " << color::reset << std::flush;
 
-		auto audio = mic.getAudio();
-		std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
-				  << color::dim << "Processing prompt..." << color::reset << std::endl;
-		std::string text = whisper.transcribe(audio);
+		std::string input;
+		std::getline(std::cin, input);
+		if (input.empty()) continue;
 
-		std::cout << color::green << color::bold << "[USER] " << color::reset
-				  << text << "\n" << std::endl;
+		std::string prompt;
+
+		if (input == "/voice" || input.rfind("/voice ", 0) == 0) {
+			mic.start();
+			std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
+					  << "Speak now... Press any key to stop";
+			std::cin.get();
+			mic.stop();
+
+			auto audio = mic.getAudio();
+			std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
+					  << color::dim << "Processing..." << color::reset << std::endl;
+			std::string raw = whisper.transcribe(audio);
+
+			std::cout << color::green << color::bold << "[USER] " << color::reset
+					  << raw << std::endl;
+
+			std::cout << color::dim << "Mode? [code|hack|plan] (current: " << modeLabel << "): "
+					  << color::reset << std::flush;
+			std::string modeInput;
+			std::getline(std::cin, modeInput);
+
+			if (modeInput == "code" || modeInput == "hack" || modeInput == "plan") {
+				mode = modeInput;
+				modeLabel = (mode == "code") ? "Coder" :
+							(mode == "hack") ? "Pentester" : "Planner";
+				promptPath = "mcp/" + mode + ".md";
+				lama.setMode(promptPath);
+				std::cout << color::magenta << color::bold << "[MODE] " << color::reset
+						  << "Switched to " << color::magenta << modeLabel << color::reset << std::endl;
+			}
+
+			prompt = raw;
+		} else {
+			// check for /model in text input
+			size_t modelPos = input.find("/model");
+			if (modelPos != std::string::npos) {
+				std::string afterModel = input.substr(modelPos + 6);
+				std::string newModel;
+				auto space = afterModel.find_first_not_of(' ');
+				if (space != std::string::npos) {
+					auto end = afterModel.find_first_of(" \n", space);
+					newModel = (end != std::string::npos)
+						? afterModel.substr(space, end - space)
+						: afterModel.substr(space);
+				}
+
+				if (!newModel.empty()) {
+					model = newModel;
+					lama.setModel(model);
+					std::cout << color::magenta << color::bold << "[MODEL] " << color::reset
+							  << "Switched to " << color::magenta << model << color::reset << std::endl;
+				} else {
+					std::cout << color::yellow << "Current model: " << model << color::reset << std::endl;
+				}
+
+				input.erase(modelPos, 6 + afterModel.size());
+				auto start = input.find_first_not_of(" \t\n");
+				auto end = input.find_last_not_of(" \t\n");
+				input = (start != std::string::npos) ? input.substr(start, end - start + 1) : "";
+			}
+
+			// check for /mode in text input
+			size_t modePos = input.find("/mode");
+			if (modePos != std::string::npos) {
+				std::string afterMode = input.substr(modePos + 5);
+				std::string newMode;
+				auto space = afterMode.find_first_not_of(' ');
+				if (space != std::string::npos) {
+					auto end = afterMode.find_first_of(" \n", space);
+					newMode = (end != std::string::npos)
+						? afterMode.substr(space, end - space)
+						: afterMode.substr(space);
+				}
+
+				if (newMode == "code" || newMode == "hack" || newMode == "plan") {
+					mode = newMode;
+					modeLabel = (mode == "code") ? "Coder" :
+								(mode == "hack") ? "Pentester" : "Planner";
+					promptPath = "mcp/" + mode + ".md";
+					lama.setMode(promptPath);
+					std::cout << color::magenta << color::bold << "[MODE] " << color::reset
+							  << "Switched to " << color::magenta << modeLabel << color::reset
+							  << " mode (mcp/" << mode << ".md)" << std::endl;
+				} else {
+					std::cout << color::red << "Invalid mode: " << newMode
+							  << "\nValid modes: code, hack, plan" << color::reset << std::endl;
+					std::cout << std::endl;
+					continue;
+				}
+
+				prompt = input;
+				prompt.erase(modePos, 5 + afterMode.size());
+				auto start = prompt.find_first_not_of(" \t\n");
+				auto end = prompt.find_last_not_of(" \t\n");
+				prompt = (start != std::string::npos) ? prompt.substr(start, end - start + 1) : "";
+			} else {
+				prompt = input;
+			}
+		}
+
+		if (prompt.empty()) {
+			std::cout << std::endl;
+			continue;
+		}
 
 		std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
 				  << color::dim << "Thinking..." << color::reset << std::endl;
 		std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
-		json output = lama.chat(text, [](const std::string& token) {
+		json output = lama.chat(prompt, [](const std::string& token) {
 			std::cout << token << std::flush;
 		});
 		std::cout << std::endl;
+
+		for (int retry = 0; retry < 3; retry++) {
+			auto& content = output["message"]["content"];
+			bool contentEmpty = !output["message"].contains("content")
+								|| content.is_null()
+								|| (content.is_string() && content.get<std::string>().empty());
+			bool empty = contentEmpty && !output["message"].contains("tool_calls");
+			if (!empty) break;
+			std::cout << color::yellow << color::bold << "  [RETRY] " << color::reset
+					  << color::dim << "Empty response, sending continue..." << color::reset << std::endl;
+			std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
+			output = lama.chat(std::string("continue"), [](const std::string& token) {
+				std::cout << token << std::flush;
+			});
+			std::cout << std::endl;
+		}
 
 		while (output["message"].contains("tool_calls")) {
 			json tool_calls = output["message"]["tool_calls"];
@@ -133,6 +277,22 @@ int main(int argc, char* argv[])
 				std::cout << token << std::flush;
 			});
 			std::cout << std::endl;
+
+			for (int retry = 0; retry < 3; retry++) {
+				auto& content = output["message"]["content"];
+				bool contentEmpty = !output["message"].contains("content")
+									|| content.is_null()
+									|| (content.is_string() && content.get<std::string>().empty());
+				bool empty = contentEmpty && !output["message"].contains("tool_calls");
+				if (!empty) break;
+				std::cout << color::yellow << color::bold << "  [RETRY] " << color::reset
+						  << color::dim << "Empty response, sending continue..." << color::reset << std::endl;
+				std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
+				output = lama.chat(std::string("continue"), [](const std::string& token) {
+					std::cout << token << std::flush;
+				});
+				std::cout << std::endl;
+			}
 		}
 
 		std::cout << std::endl;

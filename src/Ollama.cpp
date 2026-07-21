@@ -32,7 +32,7 @@ static void loadEnvFile(const std::string& path)
 	}
 }
 
-Ollama::Ollama(std::string url, std::string model, std::string api_key)
+Ollama::Ollama(std::string url, std::string model, std::string api_key, std::string system_prompt_path)
 	: url(url), model(model), api_key(api_key), curl(nullptr)
 {
 	curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -49,7 +49,8 @@ Ollama::Ollama(std::string url, std::string model, std::string api_key)
 
 	std::string systemPrompt = "Keep all answers as short as possible. Cut to the chase.";
 
-	std::ifstream file("mcp/system.md");
+	std::string promptPath = system_prompt_path.empty() ? "mcp/code.md" : system_prompt_path;
+	std::ifstream file(promptPath);
 	if (file.is_open()) {
 		std::stringstream buf;
 		buf << file.rdbuf();
@@ -382,4 +383,28 @@ void Ollama::addTool(json mcp_tool)
 	}
 
 	this->tools.push_back(ollama_tool);
+}
+
+void Ollama::setMode(const std::string& system_prompt_path)
+{
+	std::string systemPrompt = "Keep all answers as short as possible. Cut to the chase.";
+
+	std::ifstream file(system_prompt_path);
+	if (file.is_open()) {
+		std::stringstream buf;
+		buf << file.rdbuf();
+		systemPrompt = buf.str();
+	}
+
+	messages = json::array({
+		{
+			{"role", "system"},
+			{"content", systemPrompt}
+		}
+	});
+}
+
+void Ollama::setModel(const std::string& newModel)
+{
+	this->model = newModel;
 }

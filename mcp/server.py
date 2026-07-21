@@ -12,9 +12,8 @@ from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("Coding Agent")
 
-WORKSPACE_ROOT = Path("~/vibes").expanduser()
+WORKSPACE_ROOT = Path(os.environ.get("JARVIS_WORKSPACE", ".")).resolve()
 WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
-WORKSPACE_ROOT = WORKSPACE_ROOT.resolve()
 SNAPSHOT_DIR = WORKSPACE_ROOT / ".jarvis_snapshots"
 
 

@@ -22,7 +22,7 @@ class Ollama {
 		json doRequest(StreamCallback on_token);
 
 	public:
-		Ollama(std::string url, std::string model, std::string api_key = "");
+		Ollama(std::string url, std::string model, std::string api_key = "", std::string system_prompt_path = "");
 		json chat(std::string prompt, StreamCallback on_token = nullptr);
 		json chat(json message, StreamCallback on_token = nullptr);
 
@@ -30,4 +30,6 @@ class Ollama {
 		json complete(StreamCallback on_token = nullptr);
 
 		void addTool(json mcp_tool);
+		void setMode(const std::string& system_prompt_path);
+		void setModel(const std::string& newModel);
 };
