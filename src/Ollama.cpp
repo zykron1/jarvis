@@ -2,8 +2,42 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <thread>
+#include <chrono>
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
+
+static std::string sanitizeToolName(const std::string& name) {
+	std::string result = name;
+	size_t start = 0;
+	while ((start = result.find("<|", start)) != std::string::npos) {
+		size_t end = result.find("|>", start);
+		if (end != std::string::npos)
+			result.erase(start, end - start + 2);
+		else
+			break;
+	}
+	auto first = result.find_first_not_of(" \t\n\r");
+	auto last = result.find_last_not_of(" \t\n\r");
+	if (first == std::string::npos) return "";
+	result = result.substr(first, last - first + 1);
+
+	static const std::vector<std::string> suffixes = {
+		"commentary", "Commentary", "COMMENTARY",
+		"call", "Call", "CALL",
+		"function", "Function", "FUNCTION",
+		"tool", "Tool", "TOOL"
+	};
+	for (auto& suffix : suffixes) {
+		if (result.size() > suffix.size() &&
+			result.compare(result.size() - suffix.size(), suffix.size(), suffix) == 0) {
+			result.erase(result.size() - suffix.size());
+			break;
+		}
+	}
+
+	return result;
+}
 
 static void loadEnvFile(const std::string& path)
 {
@@ -149,7 +183,7 @@ static void parseOpenAISSE(const std::string& line, StreamState* state)
 					if (tc.contains("function")) {
 						auto& fn = tc["function"];
 						if (fn.contains("name") && !fn["name"].is_null())
-							entry["function"]["name"] = fn["name"].get<std::string>();
+							entry["function"]["name"] = sanitizeToolName(fn["name"].get<std::string>());
 
 						if (fn.contains("arguments") && !fn["arguments"].is_null()) {
 							std::string cur = entry["function"].value("arguments", "");
@@ -220,7 +254,7 @@ static json buildResponse(StreamState& state)
 
 			if (tc.contains("function")) {
 				auto& fn = tc["function"];
-				call["function"]["name"] = fn["name"];
+				call["function"]["name"] = sanitizeToolName(fn["name"].get<std::string>());
 
 				if (fn.contains("arguments")) {
 					std::string args_str = fn["arguments"].get<std::string>();
@@ -246,95 +280,88 @@ static json buildResponse(StreamState& state)
 
 json Ollama::doRequest(StreamCallback on_token)
 {
-	this->curl = curl_easy_init();
+	trimContext();
 
-	if (!this->curl)
-		return json();
-
-	json request;
-
-	request["model"] = model;
-	request["stream"] = true;
-	request["messages"] = messages;
-	if (!tools.empty()) request["tools"] = tools;
-
-	std::string j = request.dump();
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_URL,
-		this->url.c_str()
-	);
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_POST,
-		1L
-	);
-
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_POSTFIELDS,
-		j.c_str()
-	);
-
-	curl_slist* headers = nullptr;
-	headers = curl_slist_append(
-		headers,
-		"Content-Type: application/json"
-	);
-
-	if (!api_key.empty()) {
-		std::string auth = "Authorization: Bearer " + api_key;
-		headers = curl_slist_append(headers, auth.c_str());
+	auto now = std::chrono::steady_clock::now();
+	auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_request_time).count();
+	if (elapsed < rate_limit_delay_ms) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(rate_limit_delay_ms - elapsed));
 	}
 
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_HTTPHEADER,
-		headers
-	);
+	int max_retries = 3;
+	for (int attempt = 0; attempt <= max_retries; attempt++) {
+		if (attempt > 0) {
+			int backoff_ms = 1000 * (1 << (attempt - 1));
+			std::cerr << "\n[RETRY] Rate limited, waiting " << backoff_ms << "ms before attempt " << (attempt + 1) << "/" << (max_retries + 1) << "..." << std::endl;
+			std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
+		}
 
-	StreamState state;
-	state.on_token = on_token;
-	state.openai_compat = openai_compat;
+		this->curl = curl_easy_init();
+		if (!this->curl)
+			return json();
 
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_WRITEFUNCTION,
-		streamWriteCallback
-	);
+		json request;
+		request["model"] = model;
+		request["max_tokens"] = max_tokens;
+		request["stream"] = true;
+		request["messages"] = messages;
+		if (!tools.empty()) request["tools"] = tools;
 
-	curl_easy_setopt(
-		this->curl,
-		CURLOPT_WRITEDATA,
-		&state
-	);
+		std::string j = request.dump();
 
-	CURLcode result = curl_easy_perform(this->curl);
+		curl_easy_setopt(this->curl, CURLOPT_URL, this->url.c_str());
+		curl_easy_setopt(this->curl, CURLOPT_POST, 1L);
+		curl_easy_setopt(this->curl, CURLOPT_POSTFIELDS, j.c_str());
 
-	long http_code = 0;
-	curl_easy_getinfo(this->curl, CURLINFO_RESPONSE_CODE, &http_code);
-	if (http_code >= 400) {
-		std::cerr << "\n[HTTP " << http_code << "] Raw body: " << state.buffer << state.full_content << std::endl;
+		curl_slist* headers = nullptr;
+		headers = curl_slist_append(headers, "Content-Type: application/json");
+		if (!api_key.empty()) {
+			std::string auth = "Authorization: Bearer " + api_key;
+			headers = curl_slist_append(headers, auth.c_str());
+		}
+		curl_easy_setopt(this->curl, CURLOPT_HTTPHEADER, headers);
+
+		StreamState state;
+		state.on_token = on_token;
+		state.openai_compat = openai_compat;
+
+		curl_easy_setopt(this->curl, CURLOPT_WRITEFUNCTION, streamWriteCallback);
+		curl_easy_setopt(this->curl, CURLOPT_WRITEDATA, &state);
+
+		CURLcode result = curl_easy_perform(this->curl);
+
+		long http_code = 0;
+		curl_easy_getinfo(this->curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+		processRemainingBuffer(&state);
+		curl_slist_free_all(headers);
+		curl_easy_cleanup(this->curl);
+
+		last_request_time = std::chrono::steady_clock::now();
+
+		if (http_code == 429) {
+			std::cerr << "\n[HTTP 429] Rate limited." << std::endl;
+			if (attempt < max_retries) continue;
+		}
+
+		if (http_code >= 400) {
+			std::cerr << "\n[HTTP " << http_code << "] Raw body: " << state.buffer << state.full_content << std::endl;
+		}
+
+		if (result != CURLE_OK)
+			return json();
+
+		json parsed_response = buildResponse(state);
+
+		if (parsed_response.contains("message")) {
+			messages.push_back(parsed_response["message"]);
+		}
+
+		std::cout << "\n\033[2m" << parsed_response.dump(2) << "\033[0m" << std::endl;
+		return parsed_response;
 	}
 
-	processRemainingBuffer(&state);
-
-	curl_slist_free_all(headers);
-	curl_easy_cleanup(this->curl);
-
-	if (result != CURLE_OK)
-		return json();
-
-	json parsed_response = buildResponse(state);
-
-	if (parsed_response.contains("message")) {
-		messages.push_back(parsed_response["message"]);
-	}
-
-	std::cout << "\n\033[2m" << parsed_response.dump(2) << "\033[0m" << std::endl;
-	return parsed_response;
+	return json();
 }
 
 json Ollama::chat(std::string prompt, StreamCallback on_token)
@@ -385,6 +412,24 @@ void Ollama::addTool(json mcp_tool)
 	this->tools.push_back(ollama_tool);
 }
 
+bool Ollama::hasTool(const std::string& name) const
+{
+	for (const auto& t : tools) {
+		if (t["function"]["name"].get<std::string>() == name)
+			return true;
+	}
+	return false;
+}
+
+std::vector<std::string> Ollama::toolNames() const
+{
+	std::vector<std::string> names;
+	for (const auto& t : tools) {
+		names.push_back(t["function"]["name"].get<std::string>());
+	}
+	return names;
+}
+
 void Ollama::setMode(const std::string& system_prompt_path)
 {
 	std::string systemPrompt = "Keep all answers as short as possible. Cut to the chase.";
@@ -396,15 +441,73 @@ void Ollama::setMode(const std::string& system_prompt_path)
 		systemPrompt = buf.str();
 	}
 
-	messages = json::array({
-		{
-			{"role", "system"},
-			{"content", systemPrompt}
-		}
-	});
+	messages[0]["content"] = systemPrompt;
 }
 
 void Ollama::setModel(const std::string& newModel)
 {
 	this->model = newModel;
+}
+
+void Ollama::setRateLimitDelay(int ms)
+{
+	this->rate_limit_delay_ms = ms;
+}
+
+void Ollama::setMaxContextTokens(int tokens)
+{
+	this->max_context_tokens = tokens;
+}
+
+static int estimateTokens(const json& msg)
+{
+	int tokens = 0;
+	if (msg.contains("content") && !msg["content"].is_null() && msg["content"].is_string())
+		tokens += msg["content"].get<std::string>().size() / 4;
+	if (msg.contains("role"))
+		tokens += 4;
+	if (msg.contains("tool_call_id"))
+		tokens += 4;
+	if (msg.contains("tool_calls")) {
+		for (auto& tc : msg["tool_calls"]) {
+			if (tc.contains("function")) {
+				auto& fn = tc["function"];
+				if (fn.contains("name"))
+					tokens += fn["name"].get<std::string>().size() / 4 + 2;
+				if (fn.contains("arguments"))
+					tokens += fn["arguments"].get<std::string>().size() / 4;
+			}
+		}
+	}
+	return tokens + 4;
+}
+
+void Ollama::trimContext()
+{
+	int total = 0;
+	for (auto& m : messages)
+		total += estimateTokens(m);
+
+	if (total <= max_context_tokens)
+		return;
+
+	int system_tokens = estimateTokens(messages[0]);
+	int budget = max_context_tokens - system_tokens - 200;
+
+	if (budget <= 0) return;
+
+	int to_remove = 0;
+	int freed = 0;
+	for (int i = 1; i < (int)messages.size() - 2; i++) {
+		freed += estimateTokens(messages[i]);
+		to_remove++;
+		if (freed >= total - max_context_tokens)
+			break;
+	}
+
+	if (to_remove > 0) {
+		messages.erase(messages.begin() + 1, messages.begin() + 1 + to_remove);
+		std::cerr << "\n[CONTEXT] Trimmed " << to_remove
+				  << " old messages (" << freed << " tokens freed)" << std::endl;
+	}
 }

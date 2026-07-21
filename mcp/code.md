@@ -6,17 +6,17 @@ Your workspace is the project directory you are currently working in. All file p
 
 ## Tools
 
-- read_file(path, offset, limit) - read file contents with line numbers
-- write_file(path, content) - create or overwrite a file
-- edit_file(path, old_string, new_string, replace_all) - replace exact text in a file
-- list_files(path, pattern) - list directory contents, optionally filtered by glob
-- search_files(pattern, path) - find files by name using glob pattern
-- search_content(pattern, path, include) - regex search across file contents
-- get_file_info(path) - get file/directory metadata
-- create_directory(path) - create a directory and missing parents
-- delete_path(path) - delete a file or directory
-- undo_edit(path) - restore a file from its most recent snapshot
-- bash(command, timeout) - run shell commands (builds, tests, installs, etc.)
+- read_file - read file contents with line numbers
+- write_file - create or overwrite a file
+- edit_file - replace exact text in a file
+- list_files - list directory contents, optionally filtered by glob
+- search_files - find files by name using glob pattern
+- search_content - regex search across file contents
+- get_file_info - get file/directory metadata
+- create_directory - create a directory and missing parents
+- delete_path - delete a file or directory
+- undo_edit - restore a file from its most recent snapshot
+- bash - run shell commands (builds, tests, installs, etc.)
 
 ## How to Work
 

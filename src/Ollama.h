@@ -3,6 +3,7 @@
 #include <curl/curl.h>
 #include <string>
 #include <functional>
+#include <chrono>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -14,12 +15,17 @@ class Ollama {
 		std::string model;
 		std::string api_key;
 		bool openai_compat = false;
+		int max_tokens = 4096;
+		int max_context_tokens = 12000;
 		json messages;
 		CURL* curl = nullptr;
 		json tools = json::array();
 		json last_tool_calls = json::array();
+		std::chrono::steady_clock::time_point last_request_time{};
+		int rate_limit_delay_ms = 2000;
 
 		json doRequest(StreamCallback on_token);
+		void trimContext();
 
 	public:
 		Ollama(std::string url, std::string model, std::string api_key = "", std::string system_prompt_path = "");
@@ -29,7 +35,11 @@ class Ollama {
 		void addMessage(json message);
 		json complete(StreamCallback on_token = nullptr);
 
-		void addTool(json mcp_tool);
-		void setMode(const std::string& system_prompt_path);
+	void addTool(json mcp_tool);
+	bool hasTool(const std::string& name) const;
+	std::vector<std::string> toolNames() const;
+	void setMode(const std::string& system_prompt_path);
 		void setModel(const std::string& newModel);
+		void setRateLimitDelay(int ms);
+		void setMaxContextTokens(int tokens);
 };

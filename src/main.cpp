@@ -9,6 +9,8 @@
 #include <ostream>
 #include <string>
 #include <filesystem>
+#include <thread>
+#include <chrono>
 
 namespace color {
 	const char* reset   = "\033[0m";
@@ -25,9 +27,17 @@ namespace color {
 int main(int argc, char* argv[])
 {
 	std::string prog = std::filesystem::path(argv[0]).filename().string();
-	std::string model = "nvidia/nemotron-3-ultra-550b-a55b:free";
+	std::string model = "openai/gpt-oss-20b";
 	std::string mode = "code";
 	std::string workspace = std::filesystem::current_path().string();
+
+	auto expandTilde = [](const std::string& path) -> std::string {
+		if (!path.empty() && path[0] == '~') {
+			const char* home = std::getenv("HOME");
+			if (home) return std::string(home) + path.substr(1);
+		}
+		return path;
+	};
 
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
@@ -57,8 +67,8 @@ int main(int argc, char* argv[])
 				std::cerr << "Error: --mode requires an argument\n";
 				return 1;
 			}
-		} else if (std::filesystem::is_directory(arg)) {
-			workspace = std::filesystem::absolute(arg).string();
+	} else if (arg[0] == '/' || arg[0] == '.' || arg[0] == '~') {
+		workspace = std::filesystem::absolute(expandTilde(arg)).string();
 		} else {
 			model = arg;
 		}
@@ -70,8 +80,8 @@ int main(int argc, char* argv[])
 
 	Microphone mic;
 	Whisper whisper("models/ggml-base.en.bin");
-	//Ollama lama("https://openrouter.ai/api/v1/chat/completions", model, "", promptPath);
-	Ollama lama("https://ai.hackclub.com/proxy/v1/chat/completions", model, "", promptPath);
+	Ollama lama("https://openrouter.ai/api/v1/chat/completions", model, "", promptPath);
+	//Ollama lama("https://ai.hackclub.com/proxy/v1/chat/completions", model, "", promptPath);
 
 	std::cout << "Model: " << model << " | Mode: " << color::magenta << modeLabel << color::reset
 			  << " | Workspace: " << color::dim << workspace << color::reset << std::endl;
@@ -217,7 +227,8 @@ int main(int argc, char* argv[])
 			bool empty = contentEmpty && !output["message"].contains("tool_calls");
 			if (!empty) break;
 			std::cout << color::yellow << color::bold << "  [RETRY] " << color::reset
-					  << color::dim << "Empty response, sending continue..." << color::reset << std::endl;
+					  << color::dim << "Empty response, waiting 1s and retrying..." << color::reset << std::endl;
+			std::this_thread::sleep_for(std::chrono::seconds(1));
 			std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
 			output = lama.chat(std::string("continue"), [](const std::string& token) {
 				std::cout << token << std::flush;
@@ -242,22 +253,41 @@ int main(int argc, char* argv[])
 					  << color::dim << name << color::reset << std::endl;
 
 			std::string tool_text;
-			try {
-				json result = mcp.callTool(name, arguments);
-
-				if (result.contains("content") && result["content"].is_array()) {
-					for (auto& item : result["content"]) {
-						if (item.contains("text")) {
-							tool_text += item["text"].get<std::string>();
-						}
-					}
-				} else {
-					tool_text = result.dump();
+			if (!lama.hasTool(name)) {
+				auto valid = lama.toolNames();
+				std::string valid_list;
+				for (size_t i = 0; i < valid.size(); i++) {
+					if (i > 0) valid_list += ", ";
+					valid_list += valid[i];
 				}
-			} catch (const std::exception& e) {
-				tool_text = std::string("Error calling tool '") + name + "': " + e.what();
+				tool_text = "Error: Unknown tool '" + name + "'. Valid tools are: " + valid_list;
 				std::cout << color::red << color::bold << "  [ERROR] " << color::reset
 						  << color::dim << tool_text << color::reset << std::endl;
+			} else {
+				try {
+					json result = mcp.callTool(name, arguments);
+
+					if (result.contains("content") && result["content"].is_array()) {
+						for (auto& item : result["content"]) {
+							if (item.contains("text")) {
+								tool_text += item["text"].get<std::string>();
+							}
+						}
+					} else {
+						tool_text = result.dump();
+					}
+				} catch (const std::exception& e) {
+					tool_text = std::string("Error calling tool '") + name + "': " + e.what();
+					std::cout << color::red << color::bold << "  [ERROR] " << color::reset
+							  << color::dim << tool_text << color::reset << std::endl;
+				}
+			}
+
+			const int max_tool_chars = 3000;
+			if ((int)tool_text.size() > max_tool_chars) {
+				std::string truncated = tool_text.substr(0, max_tool_chars);
+				truncated += "\n... [truncated, total " + std::to_string(tool_text.size()) + " chars]";
+				tool_text = truncated;
 			}
 
 			json tool_response = {
@@ -286,7 +316,8 @@ int main(int argc, char* argv[])
 				bool empty = contentEmpty && !output["message"].contains("tool_calls");
 				if (!empty) break;
 				std::cout << color::yellow << color::bold << "  [RETRY] " << color::reset
-						  << color::dim << "Empty response, sending continue..." << color::reset << std::endl;
+						  << color::dim << "Empty response, waiting 1s and retrying..." << color::reset << std::endl;
+				std::this_thread::sleep_for(std::chrono::seconds(1));
 				std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
 				output = lama.chat(std::string("continue"), [](const std::string& token) {
 					std::cout << token << std::flush;
