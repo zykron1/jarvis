@@ -1,4 +1,4 @@
-#include "MCP.h"
+#include "MCPManager.h"
 #include "Microphone.h"
 #include "Whisper.h"
 #include "Ollama.h"
@@ -44,7 +44,7 @@ int main(int argc, char* argv[])
 		if (arg == "--help" || arg == "-h") {
 			std::cout << "Usage: " << prog << " [OPTIONS] [FOLDER] [MODEL]\n\n"
 					  << "  FOLDER  Project directory to work in (default: current directory)\n"
-					  << "  MODEL   OpenRouter model ID (default: anthropic/claude-sonnet-4)\n\n"
+					  << "  MODEL   OpenRouter model ID (default: openai/gpt-oss-20b)\n\n"
 					  << "Options:\n"
 					  << "  -m, --mode <mode>   Agent mode: code, hack, plan (default: code)\n"
 					  << "  -h, --help          Show this help message\n"
@@ -81,24 +81,31 @@ int main(int argc, char* argv[])
 	Microphone mic;
 	Whisper whisper("models/ggml-base.en.bin");
 	Ollama lama("https://openrouter.ai/api/v1/chat/completions", model, "", promptPath);
-	//Ollama lama("https://ai.hackclub.com/proxy/v1/chat/completions", model, "", promptPath);
+
+	MCPManager mcp;
+	if (!mcp.loadConfig("mcp-servers.json", workspace)) {
+		std::cerr << color::red << "Failed to load mcp-servers.json" << color::reset << "\n";
+		return 1;
+	}
+	if (!mcp.connectAll()) {
+		std::cerr << color::red << "Failed to connect to MCP servers" << color::reset << "\n";
+		return 1;
+	}
+
+	for (auto& tool : mcp.listAllTools()) {
+		lama.addTool(tool);
+	}
 
 	std::cout << "Model: " << model << " | Mode: " << color::magenta << modeLabel << color::reset
 			  << " | Workspace: " << color::dim << workspace << color::reset << std::endl;
-
-	MCP mcp;
-	mcp.connect("JARVIS_WORKSPACE=" + workspace + " python3 mcp/server.py");
-
-	for (auto& mcp_func : mcp.listTools()) {
-		lama.addTool(mcp_func);
-	}
-
 	std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
-			  << color::dim << "Successfully loaded voice-to-text model." << color::reset << "\n";
+			  << "Connected to " << color::bold << mcp.serverNames().size() << color::reset
+			  << " MCP server(s), " << color::bold << mcp.toolNames().size() << color::reset
+			  << " tool(s) loaded." << "\n";
 
 	while (1) {
 		std::cout << color::cyan << color::bold << "[" << modeLabel << "] " << color::reset
-				  << color::dim << "Type /voice to speak, or type a prompt:" << color::reset << std::endl;
+				  << color::dim << "Type /voice to speak, /servers to list tools, or type a prompt:" << color::reset << std::endl;
 		std::cout << color::green << color::bold << "> " << color::reset << std::flush;
 
 		std::string input;
@@ -106,6 +113,20 @@ int main(int argc, char* argv[])
 		if (input.empty()) continue;
 
 		std::string prompt;
+
+		if (input == "/servers") {
+			std::cout << color::cyan << color::bold << "[SERVERS] " << color::reset << std::endl;
+			for (auto& name : mcp.serverNames()) {
+				std::cout << "  " << color::green << name << color::reset << std::endl;
+			}
+			std::cout << color::cyan << color::bold << "[TOOLS] " << color::reset
+					  << "(" << mcp.toolNames().size() << " total)" << std::endl;
+			for (auto& tool : mcp.toolNames()) {
+				std::cout << "  " << color::dim << tool << color::reset << std::endl;
+			}
+			std::cout << std::endl;
+			continue;
+		}
 
 		if (input == "/voice" || input.rfind("/voice ", 0) == 0) {
 			mic.start();
@@ -239,68 +260,68 @@ int main(int argc, char* argv[])
 		while (output["message"].contains("tool_calls")) {
 			json tool_calls = output["message"]["tool_calls"];
 
-		for (auto& call : tool_calls) {
-			std::string name = call["function"]["name"];
-			std::string args_str = call["function"].value("arguments", "{}");
-			json arguments;
-			try {
-				arguments = json::parse(args_str);
-			} catch (...) {
-				arguments = json::object();
-			}
-
-			std::cout << color::yellow << color::bold << "  [TOOL] " << color::reset
-					  << color::dim << name << color::reset << std::endl;
-
-			std::string tool_text;
-			if (!lama.hasTool(name)) {
-				auto valid = lama.toolNames();
-				std::string valid_list;
-				for (size_t i = 0; i < valid.size(); i++) {
-					if (i > 0) valid_list += ", ";
-					valid_list += valid[i];
-				}
-				tool_text = "Error: Unknown tool '" + name + "'. Valid tools are: " + valid_list;
-				std::cout << color::red << color::bold << "  [ERROR] " << color::reset
-						  << color::dim << tool_text << color::reset << std::endl;
-			} else {
+			for (auto& call : tool_calls) {
+				std::string name = call["function"]["name"];
+				std::string args_str = call["function"].value("arguments", "{}");
+				json arguments;
 				try {
-					json result = mcp.callTool(name, arguments);
+					arguments = json::parse(args_str);
+				} catch (...) {
+					arguments = json::object();
+				}
 
-					if (result.contains("content") && result["content"].is_array()) {
-						for (auto& item : result["content"]) {
-							if (item.contains("text")) {
-								tool_text += item["text"].get<std::string>();
-							}
-						}
-					} else {
-						tool_text = result.dump();
+				std::cout << color::yellow << color::bold << "  [TOOL] " << color::reset
+						  << color::dim << name << color::reset << std::endl;
+
+				std::string tool_text;
+				if (!mcp.hasTool(name)) {
+					auto valid = mcp.toolNames();
+					std::string valid_list;
+					for (size_t i = 0; i < valid.size(); i++) {
+						if (i > 0) valid_list += ", ";
+						valid_list += valid[i];
 					}
-				} catch (const std::exception& e) {
-					tool_text = std::string("Error calling tool '") + name + "': " + e.what();
+					tool_text = "Error: Unknown tool '" + name + "'. Valid tools are: " + valid_list;
 					std::cout << color::red << color::bold << "  [ERROR] " << color::reset
 							  << color::dim << tool_text << color::reset << std::endl;
+				} else {
+					try {
+						json result = mcp.callTool(name, arguments);
+
+						if (result.contains("content") && result["content"].is_array()) {
+							for (auto& item : result["content"]) {
+								if (item.contains("text")) {
+									tool_text += item["text"].get<std::string>();
+								}
+							}
+						} else {
+							tool_text = result.dump();
+						}
+					} catch (const std::exception& e) {
+						tool_text = std::string("Error calling tool '") + name + "': " + e.what();
+						std::cout << color::red << color::bold << "  [ERROR] " << color::reset
+								  << color::dim << tool_text << color::reset << std::endl;
+					}
 				}
+
+				const int max_tool_chars = 3000;
+				if ((int)tool_text.size() > max_tool_chars) {
+					std::string truncated = tool_text.substr(0, max_tool_chars);
+					truncated += "\n... [truncated, total " + std::to_string(tool_text.size()) + " chars]";
+					tool_text = truncated;
+				}
+
+				json tool_response = {
+					{"role", "tool"},
+					{"content", tool_text}
+				};
+
+				if (call.contains("id") && !call["id"].is_null()) {
+					tool_response["tool_call_id"] = call["id"];
+				}
+
+				lama.addMessage(tool_response);
 			}
-
-			const int max_tool_chars = 3000;
-			if ((int)tool_text.size() > max_tool_chars) {
-				std::string truncated = tool_text.substr(0, max_tool_chars);
-				truncated += "\n... [truncated, total " + std::to_string(tool_text.size()) + " chars]";
-				tool_text = truncated;
-			}
-
-			json tool_response = {
-				{"role", "tool"},
-				{"content", tool_text}
-			};
-
-			if (call.contains("id") && !call["id"].is_null()) {
-				tool_response["tool_call_id"] = call["id"];
-			}
-
-			lama.addMessage(tool_response);
-		}
 
 			std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::flush;
 			output = lama.complete([](const std::string& token) {

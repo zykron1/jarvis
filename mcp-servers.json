@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "workspace": {
+      "type": "stdio",
+      "command": "python3 mcp/server.py",
+      "env": {
+        "JARVIS_WORKSPACE": "."
+      }
+    }
+  }
+}

@@ -17,7 +17,10 @@ add_executable(jarvis
 	src/Whisper.cpp
 	src/Microphone.cpp
 	src/Ollama.cpp
-	src/MCP.cpp
+	src/StdioTransport.cpp
+	src/HTTPTransport.cpp
+	src/MCPConnection.cpp
+	src/MCPManager.cpp
 )
 
 target_include_directories(jarvis PRIVATE
