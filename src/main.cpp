@@ -27,7 +27,7 @@ namespace color {
 int main(int argc, char* argv[])
 {
 	std::string prog = std::filesystem::path(argv[0]).filename().string();
-	std::string model = "qwen3:1.7b";
+	std::string model = "openai/gpt-oss-20b";
 	std::string mode = "code";
 	std::string workspace = std::filesystem::current_path().string();
 
@@ -80,9 +80,8 @@ int main(int argc, char* argv[])
 
 	Microphone mic;
 	Whisper whisper("models/ggml-base.en.bin");
-	//Ollama lama("https://ai.hackclub.com/proxy/v1/chat/completions", model, "", promptPath);
+	Ollama lama("https://ai.hackclub.com/proxy/v1/chat/completions", model, "", promptPath);
 	//Ollama lama("https://openrouter.ai/api/v1/chat/completions", model, "", promptPath);
-	Ollama lama("http://localhost:11434/v1/completions", model, "", promptPath);
 
 	MCPManager mcp;
 	if (!mcp.loadConfig("mcp-servers.json", workspace)) {

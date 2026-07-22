@@ -39,6 +39,28 @@ static std::string sanitizeToolName(const std::string& name) {
 	return result;
 }
 
+static std::string readFileContents(const std::string& path) {
+	std::ifstream file(path);
+	if (!file.is_open()) return "";
+	std::stringstream buf;
+	buf << file.rdbuf();
+	return buf.str();
+}
+
+static std::string loadPromptWithTools(const std::string& promptPath) {
+	std::string content = readFileContents(promptPath);
+	std::string tools = readFileContents("mcp/tools.md");
+
+	if (!tools.empty()) {
+		std::string marker = "{{TOOLS}}";
+		size_t pos = content.find(marker);
+		if (pos != std::string::npos)
+			content.replace(pos, marker.size(), tools);
+	}
+
+	return content;
+}
+
 static void loadEnvFile(const std::string& path)
 {
 	std::ifstream file(path);
@@ -71,8 +93,7 @@ Ollama::Ollama(std::string url, std::string model, std::string api_key, std::str
 {
 	curl_global_init(CURL_GLOBAL_DEFAULT);
 
-	openai_compat = (url.find("localhost") == std::string::npos &&
-					 url.find("127.0.0.1") == std::string::npos);
+	openai_compat = (url.find("/v1/") != std::string::npos);
 
 	loadEnvFile(".env");
 
@@ -81,15 +102,10 @@ Ollama::Ollama(std::string url, std::string model, std::string api_key, std::str
 		if (env_key) this->api_key = env_key;
 	}
 
-	std::string systemPrompt = "Keep all answers as short as possible. Cut to the chase.";
-
 	std::string promptPath = system_prompt_path.empty() ? "mcp/code.md" : system_prompt_path;
-	std::ifstream file(promptPath);
-	if (file.is_open()) {
-		std::stringstream buf;
-		buf << file.rdbuf();
-		systemPrompt = buf.str();
-	}
+	std::string systemPrompt = loadPromptWithTools(promptPath);
+	if (systemPrompt.empty())
+		systemPrompt = "Keep all answers as short as possible. Cut to the chase.";
 
 	messages = json::array({
 		{
@@ -154,11 +170,13 @@ static void parseOpenAISSE(const std::string& line, StreamState* state)
 		if (delta.contains("delta")) {
 			auto& d = delta["delta"];
 
-			if (d.contains("content") && !d["content"].is_null()) {
-				std::string token = d["content"].get<std::string>();
-				if (!token.empty()) {
-					state->full_content += token;
-					if (state->on_token) state->on_token(token);
+			for (auto& field : {"content", "reasoning", "reasoning_content"}) {
+				if (d.contains(field) && !d[field].is_null()) {
+					std::string token = d[field].get<std::string>();
+					if (!token.empty()) {
+						state->full_content += token;
+						if (state->on_token) state->on_token(token);
+					}
 				}
 			}
 
@@ -432,14 +450,9 @@ std::vector<std::string> Ollama::toolNames() const
 
 void Ollama::setMode(const std::string& system_prompt_path)
 {
-	std::string systemPrompt = "Keep all answers as short as possible. Cut to the chase.";
-
-	std::ifstream file(system_prompt_path);
-	if (file.is_open()) {
-		std::stringstream buf;
-		buf << file.rdbuf();
-		systemPrompt = buf.str();
-	}
+	std::string systemPrompt = loadPromptWithTools(system_prompt_path);
+	if (systemPrompt.empty())
+		systemPrompt = "Keep all answers as short as possible. Cut to the chase.";
 
 	messages[0]["content"] = systemPrompt;
 }

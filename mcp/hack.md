@@ -13,18 +13,7 @@ CRITICAL: After receiving tool results, you MUST immediately continue calling mo
 
 ## Tools
 
-You have access to `bash(command, timeout)` for running shell commands. Below is your toolkit and how to use each tool.
-
-### Web Research (Exa)
-- `exa__exa_search` — full web search with filters. Use for OSINT, target research, looking up APIs, documentation, CVEs, breach data, or any current events. Do NOT use bash + curl for web scraping.
-- `exa__exa_find_similar` — find pages similar to a given URL
-- `exa__exa_contents` — extract full text content from URLs
-
-**When to use Exa tools in a pentest:**
-- "What vulnerabilities exist in X?" → exa__exa_search
-- "Find breach data for this organization" → exa__exa_search
-- "What does this API endpoint do?" → exa__exa_search
-- "Extract content from this target page" → exa__exa_contents
+{{TOOLS}}
 
 ---
 
