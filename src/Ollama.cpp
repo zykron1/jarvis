@@ -472,6 +472,11 @@ void Ollama::setMaxContextTokens(int tokens)
 	this->max_context_tokens = tokens;
 }
 
+void Ollama::setSummarizationEnabled(bool enabled)
+{
+	this->enable_summarization = enabled;
+}
+
 static int estimateTokens(const json& msg)
 {
 	int tokens = 0;
@@ -495,8 +500,66 @@ static int estimateTokens(const json& msg)
 	return tokens + 4;
 }
 
+void Ollama::summarizeContext(int from_index, int to_index)
+{
+	if (!enable_summarization || summarizing || from_index >= to_index)
+		return;
+
+	summarizing = true;
+
+	std::string summary_prompt = "Summarize the following conversation segment concisely. "
+		"Preserve key decisions, code changes, tool results, and any pending tasks. "
+		"Keep it under 2000 characters:\n\n";
+
+	for (int i = from_index; i < to_index; i++) {
+		const auto& msg = messages[i];
+		std::string role = msg.contains("role") ? msg["role"].get<std::string>() : "unknown";
+		std::string content = msg.contains("content") && msg["content"].is_string() 
+			? msg["content"].get<std::string>() 
+			: "";
+		summary_prompt += "[" + role + "] " + content + "\n\n";
+	}
+
+	json old_messages = messages;
+	messages = json::array({ old_messages[0] });
+	messages.push_back({{"role", "user"}, {"content", summary_prompt}});
+
+	json summary_resp;
+	try {
+		summary_resp = doRequest(nullptr);
+	} catch (...) {
+		summarizing = false;
+		messages = old_messages;
+		return;
+	}
+
+	summarizing = false;
+
+	std::string summary_text;
+	if (summary_resp.contains("message") && summary_resp["message"].contains("content")) {
+		summary_text = summary_resp["message"]["content"].get<std::string>();
+	} else {
+		messages = old_messages;
+		return;
+	}
+
+	messages = json::array({ old_messages[0] });
+	messages.push_back({{"role", "system"}, {"content", "Context summary of earlier messages: " + summary_text}});
+
+	for (size_t i = 1; i < old_messages.size(); i++) {
+		if ((int)i < from_index || (int)i >= to_index) {
+			messages.push_back(old_messages[i]);
+		}
+	}
+
+	std::cerr << "\n[CONTEXT] Summarized " << (to_index - from_index)
+			  << " messages into " << summary_text.size() << " chars" << std::endl;
+}
+
 void Ollama::trimContext()
 {
+	if (summarizing) return;
+
 	int total = 0;
 	for (auto& m : messages)
 		total += estimateTokens(m);
@@ -509,18 +572,23 @@ void Ollama::trimContext()
 
 	if (budget <= 0) return;
 
-	int to_remove = 0;
+	std::vector<int> indices_to_trim;
 	int freed = 0;
-	for (int i = 1; i < (int)messages.size() - 2; i++) {
+	for (int i = 2; i < (int)messages.size() - 2; i++) {
 		freed += estimateTokens(messages[i]);
-		to_remove++;
+		indices_to_trim.push_back(i);
 		if (freed >= total - max_context_tokens)
 			break;
 	}
 
-	if (to_remove > 0) {
-		messages.erase(messages.begin() + 1, messages.begin() + 1 + to_remove);
-		std::cerr << "\n[CONTEXT] Trimmed " << to_remove
+	if (!indices_to_trim.empty() && freed > 500 && enable_summarization) {
+		summarizeContext(indices_to_trim.front(), indices_to_trim.back() + 1);
+		return;
+	}
+
+	if (!indices_to_trim.empty()) {
+		messages.erase(messages.begin() + 2, messages.begin() + 2 + indices_to_trim.size());
+		std::cerr << "\n[CONTEXT] Trimmed " << indices_to_trim.size()
 				  << " old messages (" << freed << " tokens freed)" << std::endl;
 	}
 }

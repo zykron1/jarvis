@@ -2,6 +2,7 @@
 #include "Microphone.h"
 #include "Whisper.h"
 #include "Ollama.h"
+#include "termmark.h"
 #include "nlohmann/json.hpp"
 
 #include <iostream>
@@ -80,8 +81,9 @@ int main(int argc, char* argv[])
 
 	Microphone mic;
 	Whisper whisper("models/ggml-base.en.bin");
-	Ollama lama("https://ai.hackclub.com/proxy/v1/chat/completions", model, "", promptPath);
+	//Ollama lama("https://ai.hackclub.com/proxy/v1/chat/completions", model, "", promptPath);
 	//Ollama lama("https://openrouter.ai/api/v1/chat/completions", model, "", promptPath);
+	Ollama lama("https://opencode.ai/zen/v1/chat/completions", model, "", promptPath);
 
 	MCPManager mcp;
 	if (!mcp.loadConfig("mcp-servers.json", workspace)) {
@@ -126,6 +128,17 @@ int main(int argc, char* argv[])
 				std::cout << "  " << color::dim << tool << color::reset << std::endl;
 			}
 			std::cout << std::endl;
+			continue;
+		}
+
+		if (input == "/exit") {
+			std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
+					  << "Goodbye!" << std::endl;
+			break;
+		}
+
+		if (input == "/clear") {
+			std::cout << "\033[2J\033[H" << std::flush;
 			continue;
 		}
 
@@ -350,8 +363,8 @@ int main(int argc, char* argv[])
 			&& !final_content.is_null()
 			&& final_content.is_string()
 			&& !final_content.get<std::string>().empty()) {
-			std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset
-					  << final_content.get<std::string>() << std::endl;
+			std::cout << color::cyan << color::bold << "[JARVIS] " << color::reset << std::endl;
+			termmark::renderMarkdown(final_content.get<std::string>());
 		}
 		std::cout << std::endl;
 	}

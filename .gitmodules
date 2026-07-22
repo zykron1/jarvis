@@ -7,3 +7,6 @@
 [submodule "external/miniaudio"]
 	path = external/miniaudio
 	url = git@github.com:mackron/miniaudio.git
+[submodule "external/termmark"]
+	path = external/termmark
+	url = https://github.com/ishanawal/TermMark.git

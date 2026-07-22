@@ -21,10 +21,19 @@ add_executable(jarvis
 	src/HTTPTransport.cpp
 	src/MCPConnection.cpp
 	src/MCPManager.cpp
+	external/termmark/src/termmark.cpp
+	external/termmark/src/parser/MarkdownParser.cpp
+	external/termmark/src/renderer/Renderer.cpp
+	external/termmark/src/utils/FileIO.cpp
+	external/termmark/src/utils/compability.cpp
 )
 
 target_include_directories(jarvis PRIVATE
 	external/miniaudio
+	external/termmark/include
+	external/termmark/include/parser
+	external/termmark/include/renderer
+	external/termmark/include/utils
 )
 
 target_link_libraries(jarvis PRIVATE whisper)

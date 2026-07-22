@@ -23,9 +23,12 @@ class Ollama {
 		json last_tool_calls = json::array();
 		std::chrono::steady_clock::time_point last_request_time{};
 		int rate_limit_delay_ms = 2000;
+		bool summarizing = false;
+		bool enable_summarization = true;
 
 		json doRequest(StreamCallback on_token);
 		void trimContext();
+		void summarizeContext(int from_index, int to_index);
 
 	public:
 		Ollama(std::string url, std::string model, std::string api_key = "", std::string system_prompt_path = "");
@@ -42,4 +45,5 @@ class Ollama {
 		void setModel(const std::string& newModel);
 		void setRateLimitDelay(int ms);
 		void setMaxContextTokens(int tokens);
+		void setSummarizationEnabled(bool enabled);
 };
